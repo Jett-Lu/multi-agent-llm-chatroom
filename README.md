@@ -1,14 +1,58 @@
-# Secure AI API Gateway & Chat System
+# Agent Roundtable
 
-A TypeScript/Express gateway and React chat application with PostgreSQL-backed
-operational analytics. Provider API keys and conversations stay in memory. Only
-allowlisted request metadata is persisted. The provider protocol is OpenAI-style;
-multi-provider routing and streaming are not implemented.
+**`multi-agent-llm-chatroom`** is a secure BYOK chatroom where two or three AI
+participants explore one question, critique each other's answers, and summarize
+what they agree and disagree on. Configure each participant's name, role, model,
+and API key. The TypeScript/Express gateway and React app keep provider keys and
+conversation content in memory. Optional PostgreSQL analytics stores only
+allowlisted operational metadata.
+
+## How the room works
+
+1. Choose two or three participants from the server's model allowlist. Give them
+   distinct names and roles, and enter each participant's provider key separately.
+2. Enter a topic and a total reported-token stop limit (default 20,000).
+3. Run automatically or advance one turn at a time. Round one produces independent
+   answers: no participant sees another opening answer. Round two critiques the
+   discussion; round three refines positions.
+4. The first participant acts as moderator for one final summary, with explicit
+   agreements, attributed disagreements, uncertainties, and next steps. There are
+   seven calls for two participants or ten calls for three.
+5. Pause after the active turn to add a user message or advance manually. Stop
+   cancels the active request and prevents further turns. New discussion clears
+   the topic/transcript while retaining keys; **Clear keys and room** clears both.
+
+All participants use **one server-configured OpenAI-compatible Chat Completions
+endpoint**. Multiple models at that endpoint are supported; arbitrary client URLs,
+per-provider routing, native Anthropic/Google adapters, tools, and streaming are
+not implemented. Keys must be valid for the selected model at that endpoint.
+Your upstream provider may retain content according to its own policies.
+
+### Usage and limits
+
+The UI displays reported total tokens per participant and for the room, including
+the moderator's summary. It stops before the next turn once measured usage reaches
+the chosen limit. Each turn requests at most 800 output tokens, further restricted
+by the remaining measured budget. **This is a stop threshold, not a hard billing
+cap.** Prompt tokens and the final turn can exceed it. Cancelled, timed-out, and
+failed calls may consume tokens without returning usage. Missing/invalid total
+usage stops further turns; failures never retry automatically. Use provider-side
+spending controls for a monetary limit.
+
+The schedule and model selection are validated server-side on every turn. The
+browser holds room state and usage counters; the stateless API does not enforce a
+persistent quota against a modified client. Existing API rate/body/time limits
+remain enforced. Up to 20 user interjections fit within the configured message
+limit; space is reserved for remaining agent turns. Default prompt/message caps
+are 2,000/4,000 characters and the JSON body cap is 128kb. A smaller deployment
+body cap or provider context window may stop a longer discussion with a bounded
+error. Participant definitions freeze after starting; begin a new discussion to
+change them. Refreshing or closing the tab clears all room state.
 
 ## Architecture
 
 ```text
-Browser → security/validation middleware → chat route → upstream service → provider
+Browser room state → security/validation → room turn scheduler → upstream → provider
                     ↓ response finish/connection close (once)
            metadata-only bounded queue → usage repository → PostgreSQL
 
@@ -23,7 +67,7 @@ backend/
     db/              pooled client, schema, SQL migrations, migration/prune CLI
     middleware/      security, request context, telemetry and local admin sessions
     repositories/    parameterized persistence, aggregation and retention
-    routes/          chat, health, session and analytics HTTP endpoints
+    routes/          room, legacy chat, health, session and analytics HTTP endpoints
     services/        upstream client, usage normalization, queue, analytics, retention
     types/           operational metadata and chat contracts
     validation/      strict Zod chat and analytics schemas
@@ -31,8 +75,8 @@ backend/
     server.ts        runtime dependencies and bounded graceful shutdown
   tests/             unit, HTTP, real PostgreSQL and browser-server fixtures
 frontend/
-  src/components/    existing chat controls and optional analytics dashboard
-  src/services/      typed chat and cookie-authenticated analytics clients
+  src/components/    participant controls, room transcript and optional analytics dashboard
+  src/services/      typed room and cookie-authenticated analytics clients
   src/types/         response interfaces
   tests/             desktop/mobile Playwright regression and live integration tests
 compose.yaml         loopback-only development and disposable test PostgreSQL
@@ -47,6 +91,16 @@ PostgreSQL 17 server also works. Run commands from the repository root.
 npm ci
 cp .env.example .env
 ```
+
+Before starting, set `UPSTREAM_API_URL` to your trusted OpenAI-compatible endpoint
+and `UPSTREAM_MODEL` to a supported default model. Optionally set `UPSTREAM_MODELS`
+to comma-separated additional model IDs served by the same endpoint. For example,
+`UPSTREAM_MODELS=gpt-4o-mini,gpt-4o` enables those IDs if your endpoint/account supports
+them. This is an allowlist, not model discovery. Every participant can use the same
+model with different roles, or a different allowed model. Provider keys are entered
+in the browser and must never be placed in `VITE_*` configuration. Keep
+`REQUEST_BODY_LIMIT=128kb` for multi-round transcripts; update existing `.env` files
+that still use the old 16kb default.
 
 On PowerShell, use `Copy-Item .env.example .env`. Change `POSTGRES_PASSWORD` and the
 matching URL-encoded password in `DATABASE_URL`. The backend loads the root `.env`
@@ -103,10 +157,11 @@ tokens, outcomes, statuses and error categories. No API keys, authorization
 headers, prompts, messages, replies, IP addresses or raw error text are stored.
 Model names come from trusted server configuration, never request text.
 
-Each POST to `/api/chat` is counted, including validation/rate-limit failures,
+Each POST to `/api/chat` or `/api/room/turn` is counted, including validation/rate-limit failures,
 timeouts and disconnects; unrelated endpoints and OPTIONS requests are excluded.
-The model field describes the configured target even when validation prevents an
-upstream call. A successful response requires a 2xx HTTP completion.
+For room turns, the model field is resolved through the server allowlist. Rejected
+room payloads use the fixed `unresolved-room-model` label; user-supplied model text
+is never persisted. Legacy chat uses its configured default model. A successful response requires a 2xx HTTP completion.
 
 Missing, negative, fractional, nonnumeric, oversized or inconsistent usage fields
 are treated as unknown. Missing totals are **not inferred** from other counters.
@@ -165,7 +220,7 @@ To enable it on a trusted developer computer:
 2. Set `ANALYTICS_LOCAL_ENABLED=true` and `ANALYTICS_LOCAL_SECRET=<generated value>`
    in the backend `.env`. Keep `TRUST_PROXY=false` and a loopback `FRONTEND_ORIGIN`.
 3. Restart the backend. It binds to **127.0.0.1** while local analytics is enabled.
-4. Open **Usage analytics** below the chat and enter the administrator secret.
+4. Open **Usage analytics** below the room and enter the administrator secret.
 
 The secret is never compiled into frontend assets or written to browser storage.
 The input is cleared on submission. Login issues an opaque random 15-minute
@@ -188,7 +243,20 @@ guard to make the dashboard publicly reachable.
 
 ## REST API
 
-Existing endpoints remain:
+Room endpoints:
+
+- `GET /api/room/config`: allowed model IDs and public room limits. No upstream URL
+  or secrets are returned.
+- `POST /api/room/turn`: accepts `{ apiKey, topic, participants, transcript,
+  tokenBudget, tokensUsed }`. Each participant is `{ name, role, model }` with no
+  key. Only the next speaker's key is sent in `apiKey`. Transcript entries are
+  `{ kind: "agent", participantIndex, content }` or `{ kind: "user", content }`.
+  The gateway derives the next speaker/stage from the ordered transcript. Returns
+  `{ reply, participantIndex, phase, round, usage, requestId }`; room usage counters
+  are nullable. `phase` is `opening`, `critique`, `refinement`, or `summary`.
+  The summary uses participant zero's key/model. Room responses are `no-store`.
+
+Legacy endpoints remain compatible (the default UI is now the room):
 
 - `GET /api/health`: process liveness, independent of PostgreSQL.
 - `POST /api/chat`: `{ "apiKey": "...", "messages": [{ "role": "user", "content": "..." }] }`.
@@ -233,13 +301,15 @@ errors never expose SQL, credentials, connection strings or driver messages.
 The dashboard displays totals, coverage, latency, daily trends, paginated models
 and error categories. Its **Through** date includes that whole UTC day. It has
 loading, restricted/login, error, empty and database-unavailable states, and does
-not replace or unmount chat when opened.
+not replace or unmount the room when opened.
 
 ## Security controls
 
 - Runtime-only provider credentials; no browser localStorage/sessionStorage.
 - Strict Zod schemas reject unknown payload fields. Limits cover key shape,
-  message count/content, final user role, prompt size and user turns.
+  message count/content, prompt size and user turns. Room validation also enforces
+  two or three distinct participants, allowlisted models and ordered agent turns;
+  the legacy chat endpoint requires a final user message.
 - Helmet, disabled `x-powered-by`, explicit CORS allowlist, JSON body cap,
   API rate limits, request/upstream cancellation and timeouts.
 - Parameterized Drizzle queries and fixed allowlisted SQL grouping expressions.
@@ -259,7 +329,8 @@ to each process, so a distributed deployment needs a shared store.
 See `.env.example`. Existing controls remain `NODE_ENV`, `PORT`, `FRONTEND_ORIGIN`,
 `TRUST_PROXY`, `REQUEST_TIMEOUT_MS`, `UPSTREAM_TIMEOUT_MS`, `REQUEST_BODY_LIMIT`,
 `MAX_PROMPT_CHARS`, `MAX_MESSAGE_CHARS`, `MAX_TURNS`, `MAX_MESSAGES`,
-`RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `UPSTREAM_API_URL`, and `UPSTREAM_MODEL`.
+`RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `UPSTREAM_API_URL`, `UPSTREAM_MODEL`,
+and optional comma-separated `UPSTREAM_MODELS` (additional IDs, up to 2,048 chars).
 Database controls are `DATABASE_URL`, `DB_POOL_MAX` (1–20), `DB_TIMEOUT_MS`
 (100–5000), `TELEMETRY_QUEUE_SIZE` (1–10000), and `TELEMETRY_RETENTION_DAYS`.
 Local access uses `ANALYTICS_LOCAL_ENABLED` and `ANALYTICS_LOCAL_SECRET` (32–256 chars).
@@ -289,15 +360,18 @@ PowerShell equivalent: `$env:TEST_DATABASE_URL='postgresql://gateway_test:test-o
 The browser suite starts its own frontend (5173) and, when that variable is set,
 backend (4100) with a deterministic local provider double. Keep those ports free.
 It exercises real sessions, database writes, authenticated dashboard queries,
-logout, clearing chat/keys and storage privacy on desktop and mobile Chromium.
-Without the variable, the two live tests skip; four UI state tests still run.
+logout, clearing room/keys and storage privacy on desktop and mobile Chromium.
+Room regressions cover per-participant credentials, complete rounds and summary,
+manual interjections, stopping, unknown usage, and stale in-flight responses.
+Without the variable, the two live tests skip; analytics and room UI tests still run.
 Browser traces are disabled because a full live trace would contain test credentials.
 
 The backend suite covers successful/failed/concurrent requests, missing/malformed
 tokens, validation, access rejection, session expiry, outages, timeouts, queue
 saturation and a worker-handoff race. PostgreSQL tests cover migrations, constraints,
 aggregation/filtering, injection resistance, idempotency, retention and timeouts.
-See [the engineering audit](docs/engineering-audit.md) for actual verification and limitations.
+See [the engineering audit](docs/engineering-audit.md) for the earlier analytics
+implementation verification and limitations. It predates the room feature.
 
 ## Known limitations and deployment readiness
 
@@ -308,7 +382,7 @@ See [the engineering audit](docs/engineering-audit.md) for actual verification a
 - Real provider credentials, hosted database TLS, production load/failover and Docker
   itself require deployment-environment verification. Test provider responses are deterministic.
 - Only Chromium desktop/mobile emulation is covered; other browsers are unverified.
-- Multi-provider routing, streaming, distributed rate limiting and a durable event queue
+- Native multi-provider routing, streaming, distributed rate limiting and a durable event queue
   are not implemented.
 
 The lockfile includes security updates. Targeted overrides keep `qs` and development

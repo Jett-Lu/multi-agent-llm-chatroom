@@ -13,9 +13,10 @@ test('chat remains interactive; analytics authenticates, renders aggregates and 
     const data = path.endsWith('/summary') ? metrics : { items: [{ ...metrics, model: 'test-model', timestamp: '2026-01-01T00:00:00.000Z', category: 'upstream_error' }], limit: 100, offset: 0, hasMore: false };
     await route.fulfill({ json: wrap(data) });
   });
+  await page.route('**/api/room/config', route => route.fulfill({ json: { models: ['test-model'], rounds: 3, maxOutputTokens: 800, maxPromptChars: 2000, maxInterjections: 20, maxMessages: 30 } }));
   await page.goto('/');
-  await expect(page).toHaveTitle(/BringYourOwnAI|Secure AI/);
-  await expect(page.getByRole('heading', { name: 'Secure AI API Gateway & Chat System' })).toBeVisible();
+  await expect(page).toHaveTitle(/Agent Roundtable/);
+  await expect(page.getByRole('heading', { name: 'Agent Roundtable' })).toBeVisible();
   await page.getByRole('button', { name: 'Usage analytics', exact: true }).click();
   await page.getByLabel('Administrator secret').fill('test-only-secret');
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
@@ -39,6 +40,7 @@ test('chat remains interactive; analytics authenticates, renders aggregates and 
 test('shows restricted, database unavailable and empty-data states', async ({ page }) => {
   let status = 403;
   await page.route('**/api/analytics/**', route => route.fulfill({ status, json: status === 200 ? wrap(new URL(route.request().url()).pathname.endsWith('/summary') ? { ...metrics, totalRequests: 0 } : { items: [], hasMore: false, limit: 100, offset: 0 }) : { error: {} } }));
+  await page.route('**/api/room/config', route => route.fulfill({ json: { models: ['test-model'], rounds: 3, maxOutputTokens: 800, maxPromptChars: 2000, maxInterjections: 20, maxMessages: 30 } }));
   await page.goto('/');
   await page.getByRole('button', { name: 'Usage analytics', exact: true }).click();
   await page.getByRole('button', { name: 'Use existing session' }).click();
