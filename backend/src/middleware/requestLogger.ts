@@ -4,7 +4,7 @@ import { logger } from '../utils/logger.js';
 
 export const requestLoggerMiddleware = (req: Request, res: Response, next: NextFunction): void => {
   // Never log arbitrary URL paths or query strings supplied by callers.
-  const route = /^\/api\/(chat|health|session|analytics)(\/|$)/.exec(req.path)?.[1] ?? 'unknown';
+  const route = /^\/api\/(chat|room|health|session|analytics)(\/|$)/.exec(req.path)?.[1] ?? 'unknown';
   res.on('finish', () => {
     logger.info('request_completed', {
       requestId: req.requestId,

@@ -3,7 +3,7 @@ import { getConfig } from '../config/env.js';
 
 const config = getConfig();
 
-const apiKeySchema = z
+export const apiKeySchema = z
   .string()
   .trim()
   .min(12)

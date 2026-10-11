@@ -7,9 +7,11 @@ test('browser → gateway → provider → PostgreSQL → protected dashboard', 
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto('/');
-  await page.getByLabel('Provider secret').fill('sk_test_only_provider_key');
-  await page.getByLabel('Message', { exact: true }).fill('Test conversation must never be stored');
-  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await page.getByLabel('Builder API key').fill('sk_test_only_provider_key');
+  await page.getByLabel('Skeptic API key').fill('sk_test_only_provider_key');
+  await page.getByLabel('Run turns automatically').uncheck();
+  await page.getByLabel('Discussion topic', { exact: true }).fill('Test conversation must never be stored');
+  await page.getByRole('button', { name: 'Start discussion', exact: true }).click();
   await expect(page.getByText('Verified upstream reply', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Usage analytics', exact: true }).click();
   await page.getByLabel('Administrator secret').fill('e2e-only-admin-secret-never-use-outside-tests');
@@ -29,10 +31,10 @@ test('browser → gateway → provider → PostgreSQL → protected dashboard', 
   await expect(page.getByLabel('Administrator secret')).toBeVisible();
   await page.getByRole('button', { name: 'Use existing session' }).click();
   await expect(page.getByRole('alert')).toContainText('Sign in');
-  await page.getByRole('button', { name: 'Clear Conversation', exact: true }).click();
+  await page.getByRole('button', { name: 'New discussion', exact: true }).click();
   await expect(page.getByText('Verified upstream reply', { exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Clear API Key', exact: true }).click();
-  await expect(page.getByLabel('Provider secret')).toHaveValue('');
+  await page.getByRole('button', { name: 'Clear keys and room', exact: true }).click();
+  await expect(page.getByLabel('Builder API key')).toHaveValue('');
   expect(await page.evaluate(() => ({ local: localStorage.length, session: sessionStorage.length }))).toEqual({ local: 0, session: 0 });
   expect(errors).toEqual([]);
 });

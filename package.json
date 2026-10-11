@@ -1,5 +1,5 @@
 {
-  "name": "bringyourownai",
+  "name": "multi-agent-llm-chatroom",
   "private": true,
   "version": "1.0.0",
   "workspaces": [

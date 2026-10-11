@@ -25,7 +25,8 @@ const config = getConfig();
 export const requestChatCompletion = async (
   apiKey: string,
   messages: ChatMessage[],
-  requestSignal?: AbortSignal
+  requestSignal?: AbortSignal,
+  options?: { model: string; maxTokens: number }
 ): Promise<{ reply: string; usage?: UpstreamUsage }> => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort('upstream_timeout'), config.UPSTREAM_TIMEOUT_MS);
@@ -47,7 +48,8 @@ export const requestChatCompletion = async (
         Authorization: `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: config.UPSTREAM_MODEL,
+        model: options?.model ?? config.UPSTREAM_MODEL,
+        ...(options ? { max_tokens: options.maxTokens } : {}),
         messages,
         temperature: 0.7
       }),
